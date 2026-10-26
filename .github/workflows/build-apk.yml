@@ -1,0 +1,89 @@
+name: Build Android APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      app_name:
+        description: "App name"
+        required: true
+        type: string
+      app_text:
+        description: "App description"
+        required: true
+        type: string
+      chat_id:
+        description: "Telegram chat ID"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Get source code
+        uses: actions/checkout@v4
+
+      - name: Install Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+
+      - name: Update app text
+        env:
+          APP_TITLE: ${{ inputs.app_name }}
+          APP_TEXT: ${{ inputs.app_text }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import xml.etree.ElementTree as ET
+
+          root = ET.Element("resources")
+          for name, value in [
+              ("app_name", os.environ["APP_TITLE"][:60]),
+              ("app_message", os.environ["APP_TEXT"][:3000]),
+          ]:
+              element = ET.SubElement(root, "string", {"name": name})
+              element.text = value
+
+          ET.indent(root, space="    ")
+          ET.ElementTree(root).write(
+              "app/src/main/res/values/strings.xml",
+              encoding="utf-8",
+              xml_declaration=True
+          )
+          PY
+
+      - name: Build APK
+        run: gradle --no-daemon assembleDebug
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 3
+          if-no-files-found: error
+
+      - name: Send APK to Telegram
+        env:
+          BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          CHAT_ID: ${{ inputs.chat_id }}
+          APP_TITLE: ${{ inputs.app_name }}
+        run: |
+          curl --fail-with-body --silent --show-error \
+            --request POST \
+            "https://api.telegram.org/bot${BOT_TOKEN}/sendDocument" \
+            --form-string "chat_id=${CHAT_ID}" \
+            --form "document=@app/build/outputs/apk/debug/app-debug.apk" \
+            --form-string "caption=APK তৈরি হয়েছে: ${APP_TITLE}"
+            
